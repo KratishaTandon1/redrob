@@ -326,15 +326,17 @@ def evaluate_candidate(cand):
     if exp < 3.0:
         return False, 0.0, {}
         
-    # B. Geographic boundaries (must be India or willing to relocate to target cities)
-    country = profile.get("country", "").strip().lower()
-    location = profile.get("location", "").strip().lower()
+    # B. Geographic boundaries (must be Noida/Pune/NCR commutable or willing to relocate to hybrid office)
+    location_lower = profile.get("location", "").strip().lower()
+    in_commutable_zone = any(city in location_lower for city in ["noida", "pune", "delhi", "ncr", "gurgaon"])
     willing_relocate = signals.get("willing_to_relocate", False)
-    is_in_target_city = any(city in location for city in TARGET_CITIES)
     
-    if country != "india" and 'india' not in location:
-        if not willing_relocate or not is_in_target_city:
-            return False, 0.0, {}
+    if not in_commutable_zone and not willing_relocate:
+        return False, 0.0, {}
+        
+    country = profile.get("country", "").strip().lower()
+    if country != "india" and 'india' not in location_lower and not willing_relocate:
+        return False, 0.0, {}
             
     # C. Pure Consulting Filter: filter candidates who have ONLY worked in consulting firms
     companies = [job.get("company", "").strip().lower() for job in career_history]
@@ -382,6 +384,11 @@ def evaluate_candidate(cand):
     if career_history and all_academic:
         return False, 0.0, {}
 
+    # G. Notice Period Filter (disqualify notice period >= 90 days as per JD)
+    notice = signals.get("notice_period_days", 90)
+    if notice >= 90:
+        return False, 0.0, {}
+
     # --- STEP 3: TECHNICAL SCORING (Base relevance) ---
     base_score = 0.0
     
@@ -407,7 +414,25 @@ def evaluate_candidate(cand):
     hist_score = min(10.0, hist_matches * 2.5)
     base_score += min(25.0, max_cur_sim * 15.0 + hist_score)
         
-    # D. Verified Skills Scoring (counter keyword stuffers)
+    # D. Verified Skills Scoring (Tiered relevance matching)
+    # Classifies skills into Core (Tier 1), ML/NLP Foundation (Tier 2), and Engineering (Tier 3) to score according to actual importance.
+    TIER_1_SKILLS = {
+        'rag', 'retrieval-augmented generation', 'vector search', 'vector database', 'vector databases',
+        'pinecone', 'weaviate', 'qdrant', 'milvus', 'faiss', 'opensearch', 'elasticsearch',
+        'learning-to-rank', 'learning to rank', 're-ranking', 'reranking', 'ranking system', 'ranking systems',
+        'recommendation system', 'recommendation systems', 'recommender systems', 'recommender',
+        'information retrieval', 'information retrieval systems', 'semantic search', 'hybrid search',
+        'ndcg', 'mrr', 'map', 'query processing', 'bm25'
+    }
+    TIER_2_SKILLS = {
+        'nlp', 'natural language processing', 'llm', 'llms', 'fine-tuning', 'fine-tuned', 'lora', 'qlora',
+        'peft', 'pytorch', 'tensorflow', 'deep learning', 'machine learning', 'transformers',
+        'hugging face', 'huggingface', 'xgboost', 'lightgbm', 'catboost', 'scikit-learn'
+    }
+    TIER_3_SKILLS = {
+        'python', 'system design', 'mlops', 'fastapi', 'sql', 'docker', 'kubernetes', 'aws', 'gcp', 'git'
+    }
+
     full_text = (" ".join([j.get("description", "") for j in career_history]) + " " + profile.get("summary", "")).lower()
     skill_hits = []
     total_skill_contrib = 0.0
@@ -417,8 +442,16 @@ def evaluate_candidate(cand):
         s_prof = s.get("proficiency", "beginner").lower()
         s_dur = s.get("duration_months", 0)
         
-        sim = calculate_token_similarity(s_name, JD_KEYWORDS)
-        if sim > 0.45:
+        # Determine skill tier weight
+        base_weight = 0.0
+        if any(re.search(rf'\b{re.escape(k)}\b', s_name) for k in TIER_1_SKILLS):
+            base_weight = 3.0
+        elif any(re.search(rf'\b{re.escape(k)}\b', s_name) for k in TIER_2_SKILLS):
+            base_weight = 1.5
+        elif any(re.search(rf'\b{re.escape(k)}\b', s_name) for k in TIER_3_SKILLS):
+            base_weight = 0.5
+            
+        if base_weight > 0.0:
             # Proficiency weight multiplier
             prof_mult = 1.5 if s_prof == "expert" else (1.2 if s_prof == "advanced" else (0.8 if s_prof == "intermediate" else 0.4))
             # Duration weight multiplier (capped logarithmic scaling)
@@ -428,13 +461,13 @@ def evaluate_candidate(cand):
             is_verified = (s_name in full_text) or any(w in full_text for w in s_name.split())
             verification_penalty = 1.0 if is_verified else 0.1  # penalize unverified skills by 90%
             
-            contrib = sim * prof_mult * dur_mult * verification_penalty
+            contrib = base_weight * prof_mult * dur_mult * verification_penalty
             total_skill_contrib += contrib
             
             if is_verified:
                 skill_hits.append(s.get("name"))
 
-    base_score += min(40.0, total_skill_contrib * 8.0)
+    base_score += min(40.0, total_skill_contrib * 4.0)
 
     # E. Product Company Bonus
     current_company = profile.get("current_company", "").strip().lower()
@@ -522,9 +555,9 @@ def evaluate_candidate(cand):
     
     # B. Geographic Fit Factor
     loc_factor = 0.50
-    if is_in_target_city:
+    if in_commutable_zone:
         loc_factor = 1.15
-    elif willing_relocate and (country == "india" or 'india' in location):
+    elif willing_relocate and (country == "india" or 'india' in location_lower):
         loc_factor = 1.05
     elif willing_relocate:
         loc_factor = 0.80
