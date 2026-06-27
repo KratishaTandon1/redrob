@@ -140,8 +140,10 @@ def calculate_token_similarity(term, targets):
         
     best_sim = 0.0
     for target in targets:
-        # 1. Substring matching
-        if term_lower == target or target in term_lower or term_lower in target:
+        # 1. Substring matching with word boundaries to prevent sub-word matching (e.g. 'researcher' matching 'search')
+        if term_lower == target:
+            sim = 1.0
+        elif re.search(rf'\b{re.escape(target)}\b', term_lower) or re.search(rf'\b{re.escape(term_lower)}\b', target):
             sim = 1.0
         else:
             # 2. Token overlap (Jaccard similarity)
@@ -368,6 +370,18 @@ def evaluate_candidate(cand):
     if has_cv and not has_nlp:
         return False, 0.0, {}
 
+    # F. Pure Research / Academic filter: filter out candidates who have only worked in academic/research-only roles
+    academic_titles = ["postdoc", "research fellow", "professor", "lecturer", "phd candidate", "research assistant", "academic researcher"]
+    all_academic = True
+    for job in career_history:
+        j_title = job.get("title", "").lower()
+        is_academic = any(at in j_title for at in academic_titles)
+        if not is_academic:
+            all_academic = False
+            break
+    if career_history and all_academic:
+        return False, 0.0, {}
+
     # --- STEP 3: TECHNICAL SCORING (Base relevance) ---
     base_score = 0.0
     
@@ -435,14 +449,26 @@ def evaluate_candidate(cand):
     base_score += min(10.0, prod_bonus)
 
     # F. "Plain-Language" Career Description Relevance (max 20 points)
-    # Search for core semantic concepts in career descriptions/summaries to reward actual systems builders who don't keyword stuff.
-    SEARCH_KEYWORDS = {'search', 'retrieval', 'ranking', 'recommendation', 'recommender', 'matching', 'information retrieval', 'query', 'queries', 'bm25', 'vector search', 'embeddings', 'hybrid search', 'indexing', 'faiss', 'ann', 'weaviate', 'pinecone', 'qdrant', 'milvus', 'elasticsearch', 'opensearch'}
-    EVAL_KEYWORDS = {'evaluation', 'eval', 'ndcg', 'mrr', 'map', 'ab test', 'a/b test', 'online metrics', 'offline metrics', 'precision', 'recall'}
-    ML_KEYWORDS = {'machine learning', 'ml', 'deep learning', 'nlp', 'natural language processing', 'transformers', 'llm', 'llms', 'fine-tuning', 'fine-tuned', 'lora', 'qlora', 'peft', 'pytorch', 'tensorflow', 'applied scientist'}
+    # Search for core semantic concepts in career descriptions/summaries using word boundaries to prevent sub-word matching (e.g. 'search' in 'research').
+    SEARCH_KEYWORDS = {
+        'search', 'retrieval', 'ranking', 'recommendation', 'recommender', 'matching', 
+        'information retrieval', 'query', 'queries', 'bm25', 'vector search', 'embeddings', 
+        'hybrid search', 'indexing', 'faiss', 'ann', 'weaviate', 'pinecone', 'qdrant', 
+        'milvus', 'elasticsearch', 'opensearch', 'hnsw', 'vector database', 'vector databases'
+    }
+    EVAL_KEYWORDS = {
+        'evaluation', 'evaluations', 'eval', 'ndcg', 'mrr', 'map', 'ab test', 'a/b test', 
+        'online metrics', 'offline metrics', 'precision', 'recall', 'f1 score', 'f1-score'
+    }
+    ML_KEYWORDS = {
+        'machine learning', 'ml', 'deep learning', 'nlp', 'natural language processing', 
+        'transformers', 'llm', 'llms', 'fine-tuning', 'fine-tuned', 'lora', 'qlora', 
+        'peft', 'pytorch', 'tensorflow', 'applied scientist', 'applied science'
+    }
     
-    search_matches = sum(1 for kw in SEARCH_KEYWORDS if kw in full_text)
-    eval_matches = sum(1 for kw in EVAL_KEYWORDS if kw in full_text)
-    ml_matches = sum(1 for kw in ML_KEYWORDS if kw in full_text)
+    search_matches = sum(1 for kw in SEARCH_KEYWORDS if re.search(rf'\b{re.escape(kw)}\b', full_text))
+    eval_matches = sum(1 for kw in EVAL_KEYWORDS if re.search(rf'\b{re.escape(kw)}\b', full_text))
+    ml_matches = sum(1 for kw in ML_KEYWORDS if re.search(rf'\b{re.escape(kw)}\b', full_text))
     
     desc_relevance_score = min(10.0, search_matches * 2.0) + min(6.0, eval_matches * 2.0) + min(4.0, ml_matches * 1.0)
     base_score += desc_relevance_score
@@ -480,11 +506,12 @@ def evaluate_candidate(cand):
             base_score = max(0.0, base_score - 10.0)
 
     # K. Hasn't coded in 18 months penalty
+    # Penalizes senior candidates who moved into pure architecture/tech lead/management roles.
     current_job = next((j for j in career_history if j.get("is_current")), None)
     if current_job:
         cj_title = current_job.get("title", "").lower()
         cj_dur = current_job.get("duration_months", 0)
-        is_mgmt = any(mw in cj_title for mw in ["manager", "director", "vp", "head"]) and not any(ew in cj_title for ew in ["engineer", "developer", "scientist", "coder", "programmer"])
+        is_mgmt = any(mw in cj_title for mw in ["manager", "director", "vp", "head", "architect", "tech lead", "technical lead"]) and not any(ew in cj_title for ew in ["engineer", "developer", "scientist", "coder", "programmer"])
         if is_mgmt and cj_dur > 18:
             base_score = max(0.0, base_score - 15.0)
 
