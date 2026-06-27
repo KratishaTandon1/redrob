@@ -98,8 +98,6 @@ TECH_LAUNCH_YEARS = {
     "sentence transformers": 2019
 }
 
-
-
 # Disqualified current titles (roles unfit for Senior AI Engineer / Founding Team)
 DISQUALIFIED_KEYWORDS = [
     "civil", "mechanical", "electrical", "chemical", "industrial", "graphic", "designer",
@@ -285,8 +283,6 @@ def detect_honeypot(cand):
         if dur_years > yoe + 3.0:
             return True
 
-
-
     return False
 
 def calculate_consulting_ratio(career_history):
@@ -438,7 +434,50 @@ def evaluate_candidate(cand):
             
     base_score += min(10.0, prod_bonus)
 
+    # F. "Plain-Language" Career Description Relevance (max 20 points)
+    # Search for core semantic concepts in career descriptions/summaries to reward actual systems builders who don't keyword stuff.
+    SEARCH_KEYWORDS = {'search', 'retrieval', 'ranking', 'recommendation', 'recommender', 'matching', 'information retrieval', 'query', 'queries', 'bm25', 'vector search', 'embeddings', 'hybrid search', 'indexing', 'faiss', 'ann', 'weaviate', 'pinecone', 'qdrant', 'milvus', 'elasticsearch', 'opensearch'}
+    EVAL_KEYWORDS = {'evaluation', 'eval', 'ndcg', 'mrr', 'map', 'ab test', 'a/b test', 'online metrics', 'offline metrics', 'precision', 'recall'}
+    ML_KEYWORDS = {'machine learning', 'ml', 'deep learning', 'nlp', 'natural language processing', 'transformers', 'llm', 'llms', 'fine-tuning', 'fine-tuned', 'lora', 'qlora', 'peft', 'pytorch', 'tensorflow', 'applied scientist'}
+    
+    search_matches = sum(1 for kw in SEARCH_KEYWORDS if kw in full_text)
+    eval_matches = sum(1 for kw in EVAL_KEYWORDS if kw in full_text)
+    ml_matches = sum(1 for kw in ML_KEYWORDS if kw in full_text)
+    
+    desc_relevance_score = min(10.0, search_matches * 2.0) + min(6.0, eval_matches * 2.0) + min(4.0, ml_matches * 1.0)
+    base_score += desc_relevance_score
 
+    # G. GitHub Activity Bonus (max 5 points)
+    github_score = signals.get("github_activity_score", -1)
+    if github_score > 0:
+        base_score += min(5.0, github_score / 20.0)
+
+    # H. Platform Skill Assessments Bonus (max 5 points)
+    assessments = signals.get("skill_assessment_scores", {})
+    assess_bonus = 0.0
+    for s_name, s_score in assessments.items():
+        s_name_lower = s_name.lower()
+        is_relevant = any(kw in s_name_lower for kw in ["nlp", "machine learning", "deep learning", "python", "search", "retrieval", "llm", "fine-tuning", "vector"])
+        if is_relevant:
+            if s_score >= 80.0:
+                assess_bonus += 2.0
+            elif s_score >= 70.0:
+                assess_bonus += 1.5
+            elif s_score >= 50.0:
+                assess_bonus += 1.0
+    base_score += min(5.0, assess_bonus)
+
+    # I. Market Interest / Recruiter Saves Bonus (max 3 points)
+    saves = signals.get("saved_by_recruiters_30d", 0)
+    base_score += min(3.0, saves * 0.3)
+
+    # J. Title-Chaser / Job-Hopper Penalty (subtracts up to 10 points)
+    # Detects candidates who switch companies every 1.5 years or less on average.
+    distinct_companies = len(set(job.get("company", "").strip().lower() for job in career_history if job.get("company")))
+    if exp >= 3.0 and distinct_companies >= 2:
+        tenure_years = exp / distinct_companies
+        if tenure_years < 1.5:
+            base_score = max(0.0, base_score - 10.0)
 
     # K. Hasn't coded in 18 months penalty
     current_job = next((j for j in career_history if j.get("is_current")), None)
