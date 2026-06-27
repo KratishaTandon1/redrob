@@ -1,0 +1,22 @@
+# Ignore large candidate datasets
+*candidates.jsonl
+*candidates.jsonl.gz
+*sample_candidates.json
+
+# Ignore temporary submissions
+submission_test.csv
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+__MACOSX/

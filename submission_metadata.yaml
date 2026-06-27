@@ -1,0 +1,54 @@
+# Redrob Hackathon — Submission Metadata
+# Root metadata file mapping team details, compute specs, and reproduction command.
+
+team_name: "Antigravity"
+
+primary_contact:
+  name: "Prakhar"
+  email: "prakhar@example.com"
+  phone: "+91-9999999999"
+
+team_members:
+  - name: "Prakhar"
+    email: "prakhar@example.com"
+    role: "AI Engineer"
+
+github_repo: "https://github.com/prakhar/redrob-challenge"
+sandbox_link: "https://huggingface.co/spaces/prakhar/redrob-candidate-ranker"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+compute:
+  platform: "Local PC"
+  cpu_cores: 8
+  ram_gb: 16
+  python_version: "3.11"
+  os: "Windows 11"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: false
+  pre_computation_time_minutes: 0
+
+ai_tools_used:
+  - "Gemini"
+  - "Claude"
+
+ai_usage_summary: |
+  Used Gemini for code optimization, debugging, and drafting the presentation. 
+  Used Claude for architectural concepts and verifying timeline logic constraints. 
+  No candidate data was shared with external API services.
+
+methodology_summary: |
+  We built a self-contained ranking pipeline with refined timeline integrity filters. 
+  By tracking technology launch years (e.g. QLoRA, LangChain) and checking skill duration vs. 
+  years of experience (YoE), we fully eliminate keyword-stuffer honeypots. Candidates are scored 
+  using a blend of technical experience, current title relevance, product company bonuses, 
+  and "plain-language" career description keyword counts (rewarding true systems-builders). 
+  Behavioral signals (notice period, platform activity, saves) act as multipliers.
+
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true
