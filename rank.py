@@ -70,6 +70,34 @@ COMPANY_FOUNDING_YEARS = {
     "zoho": 1996
 }
 
+# Technology launch years for verifying skill durations (preventing keyword stuffing honeypots)
+TECH_LAUNCH_YEARS = {
+    "qlora": 2023,
+    "lora": 2021,
+    "peft": 2021,
+    "langchain": 2022,
+    "llamaindex": 2022,
+    "chromadb": 2022,
+    "chroma db": 2022,
+    "pinecone": 2019,
+    "qdrant": 2021,
+    "weaviate": 2019,
+    "milvus": 2019,
+    "cohere": 2019,
+    "anthropic": 2021,
+    "gpt-4": 2023,
+    "gpt-3": 2020,
+    "chatgpt": 2022,
+    "pytorch": 2016,
+    "tensorflow": 2015,
+    "transformers": 2017,
+    "fastapi": 2018,
+    "bert": 2018,
+    "xgboost": 2014,
+    "sentence-transformers": 2019,
+    "sentence transformers": 2019
+}
+
 
 
 # Disqualified current titles (roles unfit for Senior AI Engineer / Founding Team)
@@ -233,6 +261,28 @@ def detect_honeypot(cand):
         dur_months = job.get("duration_months", 0)
         dur_years = dur_months / 12.0
         if dur_years > total_exp + 0.5:
+            return True
+
+    # 8. Technology launch year violations (e.g. QLoRA experience for 5 years when it launched in 2023)
+    sorted_techs = sorted(TECH_LAUNCH_YEARS.keys(), key=len, reverse=True)
+    for s in skills:
+        name = s.get("name", "").lower()
+        dur = s.get("duration_months", 0)
+        for tech in sorted_techs:
+            if tech in name:
+                launch_year = TECH_LAUNCH_YEARS[tech]
+                max_months = (2026 - launch_year) * 12 + 6
+                if dur > max_months:
+                    return True
+                break
+
+    # 9. Skill duration vs. years of experience anomaly
+    yoe = profile.get("years_of_experience", 0.0)
+    for s in skills:
+        dur_months = s.get("duration_months", 0)
+        dur_years = dur_months / 12.0
+        # If any skill duration exceeds YoE + 3 years (buffer for pre-career learning)
+        if dur_years > yoe + 3.0:
             return True
 
 
