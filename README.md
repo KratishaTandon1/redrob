@@ -1,4 +1,15 @@
+---
+title: Redrob Candidate Ranker
+emoji: 🎯
+colorFrom: red
+colorTo: pink
+sdk: docker
+pinned: false
+app_port: 8501
+---
+
 # Candidate Discovery & Ranking AI System
+
 
 This repository implements a production-grade candidate discovery and ranking system optimized to identify top-tier Senior AI Engineers for founding teams. The ranker prioritizes genuine engineering execution and logistics viability over keyword density, while systematically filtering synthetic honeypot profiles.
 
