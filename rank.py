@@ -238,7 +238,7 @@ def detect_honeypot(cand):
         
         founding_year = None
         for name, year in COMPANY_FOUNDING_YEARS.items():
-            if name in comp:
+            if re.search(r'\b' + re.escape(name) + r'\b', comp):
                 founding_year = year
                 break
                 
@@ -246,12 +246,12 @@ def detect_honeypot(cand):
             if start_date_str:
                 try:
                     start_year = int(start_date_str.split("-")[0])
-                    if start_year < founding_year:
+                    if start_year < founding_year - 2: # started at least 3 years before founding (diff >= 3)
                         return True
                 except:
                     pass
-            # Max possible months from founding to mid 2026
-            max_months = (2026 - founding_year) * 12 + 6
+            # Max possible months from founding to mid 2026 + 18 months buffer
+            max_months = (2026 - founding_year) * 12 + 18
             if duration > max_months:
                 return True
 
@@ -263,26 +263,26 @@ def detect_honeypot(cand):
         if dur_years > total_exp + 0.5:
             return True
 
-    # 8. Technology launch year violations (e.g. QLoRA experience for 5 years when it launched in 2023)
+    # 8. Technology launch year violations (Tuned: +24 months buffer, word-boundary check)
     sorted_techs = sorted(TECH_LAUNCH_YEARS.keys(), key=len, reverse=True)
     for s in skills:
         name = s.get("name", "").lower()
         dur = s.get("duration_months", 0)
         for tech in sorted_techs:
-            if tech in name:
+            if re.search(r'\b' + re.escape(tech) + r'\b', name):
                 launch_year = TECH_LAUNCH_YEARS[tech]
-                max_months = (2026 - launch_year) * 12 + 6
+                max_months = (2026 - launch_year) * 12 + 24
                 if dur > max_months:
                     return True
                 break
 
-    # 9. Skill duration vs. years of experience anomaly
+    # 9. Skill duration vs. years of experience anomaly (Tuned: +4.5 years buffer)
     yoe = profile.get("years_of_experience", 0.0)
     for s in skills:
         dur_months = s.get("duration_months", 0)
         dur_years = dur_months / 12.0
-        # If any skill duration exceeds YoE + 3 years (buffer for pre-career learning)
-        if dur_years > yoe + 3.0:
+        # If any skill duration exceeds YoE + 4.5 years
+        if dur_years > yoe + 4.5:
             return True
 
     return False
@@ -305,6 +305,65 @@ def calculate_consulting_ratio(career_history):
         return 0.0
     return consulting_months / total_months
 
+def is_framework_enthusiast(cand):
+    skills = cand.get("skills", [])
+    skills_names = {s.get("name", "").lower() for s in skills}
+    
+    llm_skills = {"langchain", "llamaindex", "openai", "gpt-4", "gpt-3", "chatgpt", "prompt engineering", "retrieval-augmented generation", "rag"}
+    has_llm_skill = any(any(ls in sn for ls in llm_skills) for sn in skills_names)
+    
+    if not has_llm_skill:
+        return False
+        
+    pre_llm_skills = {"pytorch", "tensorflow", "xgboost", "scikit-learn", "nlp", "natural language processing", "information retrieval", "search", "ranking", "recommendation", "recommender", "deep learning", "machine learning"}
+    has_pre_llm_skill = False
+    for s in skills:
+        s_name = s.get("name", "").lower()
+        s_dur = s.get("duration_months", 0)
+        if any(ps in s_name for ps in pre_llm_skills) and s_dur >= 12:
+            has_pre_llm_skill = True
+            break
+            
+    has_pre_llm_history = False
+    career_history = cand.get("career_history", [])
+    for job in career_history:
+        start_date = job.get("start_date")
+        if start_date:
+            try:
+                start_year = int(start_date.split("-")[0])
+                if start_year < 2023:
+                    j_text = (job.get("title", "") + " " + job.get("description", "")).lower()
+                    if any(kw in j_text for kw in ["ai", "ml", "machine learning", "nlp", "retrieval", "search", "ranking", "recommendation", "data scientist"]):
+                        has_pre_llm_history = True
+                        break
+            except:
+                pass
+                
+    if has_llm_skill and not has_pre_llm_skill and not has_pre_llm_history:
+        return True
+    return False
+
+def is_closed_source_veteran(cand):
+    profile = cand.get("profile", {})
+    exp = profile.get("years_of_experience", 0.0)
+    if exp < 5.0:
+        return False
+        
+    signals = cand.get("redrob_signals", {})
+    github_score = signals.get("github_activity_score", -1)
+    if github_score != -1:
+        return False
+        
+    career_history = cand.get("career_history", [])
+    full_text = (profile.get("summary", "") + " " + " ".join([j.get("description", "") for j in career_history])).lower()
+    
+    validation_keywords = ["paper", "publication", "patent", "talk", "conference", "presentation", "open-source", "oss", "contribute", "github", "medium post", "blog", "writeup", "article", "thesis", "meetup", "speaker", "arxiv", "kaggle", "stackoverflow", "stack overflow"]
+    has_validation = any(re.search(rf'\b{re.escape(kw)}', full_text) for kw in validation_keywords)
+    
+    if not has_validation:
+        return True
+    return False
+
 def evaluate_candidate(cand):
     """
     Main evaluation wrapper. Checks eligibility and scores the candidate.
@@ -321,14 +380,11 @@ def evaluate_candidate(cand):
         return False, 0.0, {}
 
     # --- STEP 2: HARD ELIGIBILITY FILTERS ---
-    # A. Minimum Experience Floor (must have at least 3 years for Senior)
     exp = profile.get("years_of_experience", 0.0)
-    if exp < 3.0:
-        return False, 0.0, {}
         
     # B. Geographic boundaries (must be Noida/Pune/NCR commutable or willing to relocate to hybrid office)
     location_lower = profile.get("location", "").strip().lower()
-    in_commutable_zone = any(city in location_lower for city in ["noida", "pune", "delhi", "ncr", "gurgaon"])
+    in_commutable_zone = any(city in location_lower for city in TARGET_CITIES)
     willing_relocate = signals.get("willing_to_relocate", False)
     
     if not in_commutable_zone and not willing_relocate:
@@ -400,18 +456,22 @@ def evaluate_candidate(cand):
     else:
         base_score += max(5.0, 25.0 - (exp - 9.0) * 1.5)  # slowly penalize highly senior profiles
         
+    if exp < 3.0:
+        base_score = max(0.0, base_score - 15.0)  # soft experience floor penalty
+        
     # B. Current Title / Headline relevance
     headline = profile.get("headline", "").lower()
     max_cur_sim = max(calculate_token_similarity(curr_title, JD_KEYWORDS), calculate_token_similarity(headline, JD_KEYWORDS))
     
-    # C. Historical Title relevance (rewards candidates who worked in ML roles previously)
-    hist_matches = 0
+    # C. Historical ML Experience Duration relevance (rewards candidates who spent years in ML roles)
+    ml_months = 0
     for job in career_history:
         job_title = job.get("title", "").lower()
         if any(kw in job_title for kw in ["ai", "ml", "machine learning", "nlp", "retrieval", "search", "ranking", "recommendation", "applied scientist"]):
-            hist_matches += 1
+            ml_months += job.get("duration_months", 0)
             
-    hist_score = min(10.0, hist_matches * 2.5)
+    ml_years = ml_months / 12.0
+    hist_score = min(10.0, ml_years * 2.5)
     base_score += min(25.0, max_cur_sim * 15.0 + hist_score)
         
     # D. Verified Skills Scoring (Tiered relevance matching)
@@ -469,14 +529,14 @@ def evaluate_candidate(cand):
 
     base_score += min(40.0, total_skill_contrib * 4.0)
 
-    # E. Product Company Bonus
+    # E. Product Company Bonus (using exact word boundary matching)
     current_company = profile.get("current_company", "").strip().lower()
     prod_bonus = 0.0
-    if any(pc in current_company for pc in PRODUCT_COMPANIES):
+    if any(re.search(r'\b' + re.escape(pc) + r'\b', current_company) for pc in PRODUCT_COMPANIES):
         prod_bonus += 5.0
     for job in career_history:
         comp = job.get("company", "").strip().lower()
-        if any(pc in comp for pc in PRODUCT_COMPANIES):
+        if any(re.search(r'\b' + re.escape(pc) + r'\b', comp) for pc in PRODUCT_COMPANIES):
             prod_bonus += 2.0
             
     base_score += min(10.0, prod_bonus)
@@ -505,6 +565,11 @@ def evaluate_candidate(cand):
     
     desc_relevance_score = min(10.0, search_matches * 2.0) + min(6.0, eval_matches * 2.0) + min(4.0, ml_matches * 1.0)
     base_score += desc_relevance_score
+
+    # F2. Systems & Scale Execution Bonus (max 5 points)
+    scale_keywords = {"scale", "scaling", "production", "latency", "throughput", "optimize", "optimization", "optimise", "pipeline", "benchmark", "drift", "inference", "deployment", "deploy"}
+    scale_matches = sum(1 for kw in scale_keywords if re.search(rf'\b{re.escape(kw)}\b', full_text))
+    base_score += min(5.0, scale_matches * 1.0)
 
     # G. GitHub Activity Bonus (max 5 points)
     github_score = signals.get("github_activity_score", -1)
@@ -551,12 +616,15 @@ def evaluate_candidate(cand):
     # --- STEP 4: BEHAVIORAL MULTIPLIER AND LOGISTICS ---
     # A. Notice Period Factor
     notice = signals.get("notice_period_days", 90)
-    notice_factor = 1.15 if notice <= 15 else (1.10 if notice <= 30 else (1.00 if notice <= 60 else (0.80 if notice <= 90 else 0.50)))
+    notice_factor = 1.15 if notice <= 15 else (1.10 if notice <= 30 else (1.00 if notice <= 60 else (0.75 if notice <= 90 else 0.40)))
     
-    # B. Geographic Fit Factor
+    # B. Geographic Fit Factor (Noida/Pune/NCR preferred, others Tier 1 accepted)
     loc_factor = 0.50
-    if in_commutable_zone:
+    is_core_hub = any(city in location_lower for city in ["noida", "pune", "delhi", "ncr", "gurgaon"])
+    if is_core_hub:
         loc_factor = 1.15
+    elif in_commutable_zone: # other TARGET_CITIES (Hyderabad, Mumbai, etc.)
+        loc_factor = 1.08 if willing_relocate else 1.00
     elif willing_relocate and (country == "india" or 'india' in location_lower):
         loc_factor = 1.05
     elif willing_relocate:
@@ -588,11 +656,17 @@ def evaluate_candidate(cand):
     behavior_mult = notice_factor * loc_factor * active_factor * rrr_factor * otw_factor * icr_factor
     behavior_mult = max(0.4, min(1.3, behavior_mult))
     
-    # G. Continuous Consulting Penalty (fraction of career spent at service companies)
-    c_ratio = calculate_consulting_ratio(career_history)
-    consulting_mult = 1.0 - 0.40 * c_ratio
+    # G. Continuous Consulting Penalty (disabled per JD - mixed consulting+product is fine)
+    consulting_mult = 1.0
 
-    final_score = base_score * consulting_mult * behavior_mult
+    # H. Apply trap penalties (framework enthusiasts and closed-source-only veterans)
+    trap_mult = 1.0
+    if is_framework_enthusiast(cand):
+        trap_mult *= 0.1
+    if is_closed_source_veteran(cand):
+        trap_mult *= 0.1
+
+    final_score = base_score * consulting_mult * behavior_mult * trap_mult
     
     info = {
         "candidate_id": cand["candidate_id"],
@@ -619,7 +693,7 @@ def generate_reasoning(info, rank):
     company = info["company"]
     years = info["years"]
     notice = info["notice"]
-    loc = info["location"]
+    loc = info["location"] if info["location"] else "unknown location"
     skills = info["skills"]
     rr = info["rr"]
     
@@ -643,22 +717,60 @@ def generate_reasoning(info, rank):
     seed_val = sum(ord(c) for c in info["candidate_id"]) + rank
     random.seed(seed_val)
     
-    starters = [
-        f"{title} with {years} years of experience, currently working at {company}.",
-        f"Brings {years} years of software and ML experience, including their current role as {title} at {company}.",
-        f"Strong fit as {title} at {company} with {years} years of experience."
-    ]
-    
-    fits = [
-        f"Demonstrates verified {skill_str}, matching key JD technical requirements.",
-        f"Shows hands-on experience in {skill_str} which aligns well with our search.",
-        f"Strong overlap in {skill_str} combined with solid backend systems engineering."
-    ]
-    
+    if rank <= 15:
+        starters = [
+            f"Exceptional founding-team prospect with {years} years of experience, currently thriving as {title} at {company}.",
+            f"Highly recommended {title} at {company} offering {years} years of proven expertise in production engineering.",
+            f"Top-tier Senior AI candidate with {years} years of experience, currently leading as {title} at {company}."
+        ]
+        fits = [
+            f"Brings deep, verified {skill_str} matching our high-relevance search criteria.",
+            f"Demonstrates hands-on engineering execution in {skill_str} with excellent product alignment.",
+            f"Features a strong systems-builder profile with verified {skill_str} deployed in production."
+        ]
+        logistics = [
+            f"Active candidate ({int(rr*100)}% response rate) with {concern_str.strip()}",
+            f"{act_phrase}. {concern_str.strip()}",
+            f"Highly available talent. {concern_str.strip()}"
+        ]
+    elif rank <= 60:
+        starters = [
+            f"Strong {title} at {company} with {years} years of professional experience.",
+            f"Brings a solid {years}-year track record of engineering, currently working as {title} at {company}.",
+            f"Experienced {title} at {company} with {years} years of backend and ML experience."
+        ]
+        fits = [
+            f"Demonstrates capability in {skill_str}, matching the JD technical requirements.",
+            f"Shows good hands-on experience in {skill_str} with strong systems coding.",
+            f"Offers a solid technical overlap in {skill_str} and backend implementation."
+        ]
+        logistics = [
+            f"Active on the platform. {concern_str.strip()}",
+            f"{act_phrase}. {concern_str.strip()}",
+            f"Shows positive behavioral signals. {concern_str.strip()}"
+        ]
+    else:
+        starters = [
+            f"Adjacent profile showing {years} years of experience as {title} at {company}.",
+            f"Candidate with {years} years of experience as {title} at {company}.",
+            f"Positioned as filler ranking with {years} years of software experience as {title} at {company}."
+        ]
+        fits = [
+            f"Technical overlap is limited to {skill_str} with minor alignment on JD.",
+            f"Displays baseline experience in {skill_str} and general backend systems.",
+            f"Has adjacent skills in {skill_str} but lacks deep ranking/retrieval production history."
+        ]
+        logistics = [
+            f"Included due to overall experience despite {concern_str.strip()}",
+            f"Candidate is a filler with {concern_str.strip()}",
+            f"{act_phrase}. {concern_str.strip()}"
+        ]
+        
     starter = random.choice(starters)
     fit = random.choice(fits)
+    log_part = random.choice(logistics)
     
-    reasoning = f"{starter} {fit} {act_phrase}.{concern_str}"
+    reasoning = f"{starter} {fit} {log_part}"
     return reasoning.strip().replace("\n", " ")
 
 def main():

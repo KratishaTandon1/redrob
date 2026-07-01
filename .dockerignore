@@ -1,0 +1,18 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.vscode/
+.idea/
+[PUB] India_runs_data_and_ai_challenge/
+candidates.jsonl
+submission.csv
+submission_test.csv
+sample_submission.csv
+candidate_discovery_ranking_deck.pdf
+*.docx
+*.pdf
+*log

@@ -14,7 +14,7 @@ team_members:
     role: "AI Engineer"
 
 github_repo: "https://github.com/prakhar/redrob-challenge"
-sandbox_link: "https://huggingface.co/spaces/prakhar/redrob-candidate-ranker"
+sandbox_link: "https://huggingface.co/spaces/kratisha1/redrob-candidate-ranker"
 
 reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
 
