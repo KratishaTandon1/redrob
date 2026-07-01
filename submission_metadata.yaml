@@ -1,19 +1,23 @@
-# Redrob Hackathon — Submission Metadata
-# Root metadata file mapping team details, compute specs, and reproduction command.
 
-team_name: "Antigravity"
+
+team_name: "byte_speed"
 
 primary_contact:
-  name: "Prakhar"
-  email: "prakhar@example.com"
-  phone: "+91-9999999999"
+  name: "Kratisha Tandon"
+  email: "tandonkratisha@gmail.com"
+  phone: "+91-7668945102"
 
 team_members:
-  - name: "Prakhar"
-    email: "prakhar@example.com"
+  - name: "Dived Mishra"
+    email: "mishradived@gmail.com"
     role: "AI Engineer"
 
-github_repo: "https://github.com/prakhar/redrob-challenge"
+team_members:
+  - name: "Lakshya Garg"
+    email: "garglakshya00@gmail.com"
+    role: "AI Engineer"
+    
+github_repo: "https://github.com/KratishaTandon1/redrob"
 sandbox_link: "https://huggingface.co/spaces/kratisha1/redrob-candidate-ranker"
 
 reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
