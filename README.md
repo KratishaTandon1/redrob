@@ -24,7 +24,7 @@ This repository implements a production-grade candidate discovery and ranking sy
 No external packages are required beyond the standard Python library, ensuring high portability and speed.
 
 ## Execution Command
-To reproduce the candidate ranking list, run the following command from the challenge directory (`[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/`):
+To reproduce the candidate ranking list, run the following command from the root of the repository:
 
 ```bash
 python rank.py --candidates ./candidates.jsonl --out ./submission.csv

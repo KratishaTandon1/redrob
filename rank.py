@@ -382,17 +382,17 @@ def evaluate_candidate(cand):
     # --- STEP 2: HARD ELIGIBILITY FILTERS ---
     exp = profile.get("years_of_experience", 0.0)
         
-    # B. Geographic boundaries (must be Noida/Pune/NCR commutable or willing to relocate to hybrid office)
+    # B. Geographic boundaries (softened Noida/Pune/NCR preference, relocates allowed)
     location_lower = profile.get("location", "").strip().lower()
     in_commutable_zone = any(city in location_lower for city in TARGET_CITIES)
     willing_relocate = signals.get("willing_to_relocate", False)
-    
-    if not in_commutable_zone and not willing_relocate:
-        return False, 0.0, {}
-        
     country = profile.get("country", "").strip().lower()
-    if country != "india" and 'india' not in location_lower and not willing_relocate:
-        return False, 0.0, {}
+    
+    location_mult = 1.0
+    if not in_commutable_zone and not willing_relocate:
+        location_mult *= 0.05
+    elif country != "india" and 'india' not in location_lower and not willing_relocate:
+        location_mult *= 0.05
             
     # C. Pure Consulting Filter: filter candidates who have ONLY worked in consulting firms
     companies = [job.get("company", "").strip().lower() for job in career_history]
@@ -440,10 +440,11 @@ def evaluate_candidate(cand):
     if career_history and all_academic:
         return False, 0.0, {}
 
-    # G. Notice Period Filter (disqualify notice period >= 90 days as per JD)
+    # G. Notice Period Filter (softened penalty for notice period >= 90 days)
     notice = signals.get("notice_period_days", 90)
+    notice_mult = 1.0
     if notice >= 90:
-        return False, 0.0, {}
+        notice_mult *= 0.05
 
     # --- STEP 3: TECHNICAL SCORING (Base relevance) ---
     base_score = 0.0
@@ -666,7 +667,24 @@ def evaluate_candidate(cand):
     if is_closed_source_veteran(cand):
         trap_mult *= 0.1
 
-    final_score = base_score * consulting_mult * behavior_mult * trap_mult
+    # I. Skill assessment validation (anti-gaming check)
+    gaming_penalty = 1.0
+    assessment_scores = signals.get("skill_assessment_scores", {})
+    if assessment_scores:
+        for s in skills:
+            s_name = s.get("name", "")
+            s_prof = s.get("proficiency", "").lower()
+            if s_prof in ["expert", "advanced"]:
+                best_score = None
+                for a_skill, a_score in assessment_scores.items():
+                    if a_skill.lower() in s_name.lower() or s_name.lower() in a_skill.lower():
+                        if best_score is None or a_score > best_score:
+                            best_score = a_score
+                if best_score is not None and best_score < 55:
+                    gaming_penalty *= 0.3
+                    break
+
+    final_score = base_score * consulting_mult * behavior_mult * trap_mult * location_mult * notice_mult * gaming_penalty
     
     info = {
         "candidate_id": cand["candidate_id"],
@@ -678,12 +696,15 @@ def evaluate_candidate(cand):
         "notice": notice,
         "skills": skill_hits[:3],
         "score": final_score,
-        "rr": resp_rate
+        "rr": resp_rate,
+        "in_commutable_zone": in_commutable_zone,
+        "willing_relocate": willing_relocate,
+        "has_gaming_penalty": gaming_penalty < 1.0
     }
     
     return True, final_score, info
 
-def generate_reasoning(info, rank):
+def generate_reasoning(info, rank, max_score=None):
     """
     Generates fact-based reasoning sentences for the candidate, highlighting key fit points
     and honestly calling out logistics or notice period constraints.
@@ -696,81 +717,99 @@ def generate_reasoning(info, rank):
     loc = info["location"] if info["location"] else "unknown location"
     skills = info["skills"]
     rr = info["rr"]
+    in_commutable_zone = info.get("in_commutable_zone", True)
+    willing_relocate = info.get("willing_relocate", False)
+    has_gaming_penalty = info.get("has_gaming_penalty", False)
     
-    skill_str = f"expertise in {', '.join(skills)}" if skills else "solid backend capabilities"
-    act_phrase = f"highly active on the platform ({int(rr * 100)}% response rate)"
-    
-    # Gaps/concerns analysis
-    concerns = []
-    if notice >= 60:
-        concerns.append(f"notice period of {notice} days")
-    if "pune" not in loc.lower() and "noida" not in loc.lower():
-        concerns.append(f"location in {loc} (needs relocation)")
-        
-    concern_str = ""
-    if concerns:
-        concern_str = f" Acknowledged constraints: " + " and ".join(concerns) + "."
+    # Base the tone bucket on the score ratio relative to top candidate, falling back to rank index
+    if max_score is not None and max_score > 0:
+        score_ratio = info["score"] / max_score
+        if score_ratio >= 0.5:
+            tier = "strong"
+        elif score_ratio >= 0.15:
+            tier = "moderate"
+        else:
+            tier = "weak"
     else:
-        concern_str = " Displays optimal logistics and notice period."
-
+        if rank <= 15:
+            tier = "strong"
+        elif rank <= 60:
+            tier = "moderate"
+        else:
+            tier = "weak"
+            
+    # 1. Opening sentence summarizing the profile and experience level
+    if tier == "strong":
+        intro_phrases = [
+            f"Exceptional candidate {name} brings {years} years of experience as a {title} at {company}.",
+            f"Top-tier Senior AI Engineer prospect {name} offers {years} years of engineering expertise, currently at {company} as {title}.",
+            f"Leading engineering profile {name} presents {years} years of systems experience, currently working as {title} at {company}."
+        ]
+    elif tier == "moderate":
+        intro_phrases = [
+            f"Strong profile {name} has {years} years of backend experience, currently working as {title} at {company}.",
+            f"Solid candidate {name} offers a {years}-year track record, currently serving as {title} at {company}.",
+            f"Experienced software engineer {name} has accumulated {years} years of professional work, currently at {company} as {title}."
+        ]
+    else:
+        intro_phrases = [
+            f"Candidate {name} has adjacent software background with {years} years of experience as {title} at {company}.",
+            f"{name} is positioned as a filler candidate with {years} years of experience as {title} at {company}.",
+            f"With {years} years of software development experience as {title} at {company}, {name} shows adjacent qualifications."
+        ]
+        
     # Seed randomly but deterministically by candidate ID and rank
     seed_val = sum(ord(c) for c in info["candidate_id"]) + rank
     random.seed(seed_val)
-    
-    if rank <= 15:
-        starters = [
-            f"Exceptional founding-team prospect with {years} years of experience, currently thriving as {title} at {company}.",
-            f"Highly recommended {title} at {company} offering {years} years of proven expertise in production engineering.",
-            f"Top-tier Senior AI candidate with {years} years of experience, currently leading as {title} at {company}."
-        ]
-        fits = [
-            f"Brings deep, verified {skill_str} matching our high-relevance search criteria.",
-            f"Demonstrates hands-on engineering execution in {skill_str} with excellent product alignment.",
-            f"Features a strong systems-builder profile with verified {skill_str} deployed in production."
-        ]
-        logistics = [
-            f"Active candidate ({int(rr*100)}% response rate) with {concern_str.strip()}",
-            f"{act_phrase}. {concern_str.strip()}",
-            f"Highly available talent. {concern_str.strip()}"
-        ]
-    elif rank <= 60:
-        starters = [
-            f"Strong {title} at {company} with {years} years of professional experience.",
-            f"Brings a solid {years}-year track record of engineering, currently working as {title} at {company}.",
-            f"Experienced {title} at {company} with {years} years of backend and ML experience."
-        ]
-        fits = [
-            f"Demonstrates capability in {skill_str}, matching the JD technical requirements.",
-            f"Shows good hands-on experience in {skill_str} with strong systems coding.",
-            f"Offers a solid technical overlap in {skill_str} and backend implementation."
-        ]
-        logistics = [
-            f"Active on the platform. {concern_str.strip()}",
-            f"{act_phrase}. {concern_str.strip()}",
-            f"Shows positive behavioral signals. {concern_str.strip()}"
-        ]
+    intro = random.choice(intro_phrases)
+
+    # 2. Technical fit description
+    skills_list = f"expertise in {', '.join(skills)}" if skills else "backend software development"
+    if has_gaming_penalty:
+        fit = f"While they claim skills like {skills_list}, a self-reported proficiency mismatch was noted on platform assessments, indicating potential keyword inflation."
     else:
-        starters = [
-            f"Adjacent profile showing {years} years of experience as {title} at {company}.",
-            f"Candidate with {years} years of experience as {title} at {company}.",
-            f"Positioned as filler ranking with {years} years of software experience as {title} at {company}."
-        ]
-        fits = [
-            f"Technical overlap is limited to {skill_str} with minor alignment on JD.",
-            f"Displays baseline experience in {skill_str} and general backend systems.",
-            f"Has adjacent skills in {skill_str} but lacks deep ranking/retrieval production history."
-        ]
-        logistics = [
-            f"Included due to overall experience despite {concern_str.strip()}",
-            f"Candidate is a filler with {concern_str.strip()}",
-            f"{act_phrase}. {concern_str.strip()}"
-        ]
+        if tier == "strong":
+            fit_phrases = [
+                f"Features deep, verified {skills_list} matching our high-relevance search criteria for vector databases and ranking.",
+                f"Demonstrates hands-on engineering execution in {skills_list} with strong product company pedigree.",
+                f"Brings highly relevant systems-builder capabilities in {skills_list} deployed at scale."
+            ]
+        else:
+            fit_phrases = [
+                f"Shows solid overlap in {skills_list} with clean understanding of software design.",
+                f"Displays technical experience in {skills_list} and standard software architectures.",
+                f"Brings backend experience with technical familiarity in {skills_list}."
+            ]
+        fit = random.choice(fit_phrases)
+
+    # 3. Logistics and availability
+    logistics = []
+    if notice >= 90:
+        logistics.append(f"notice period is extremely long at {notice} days")
+    elif notice >= 60:
+        logistics.append(f"notice period of {notice} days is longer than preferred")
         
-    starter = random.choice(starters)
-    fit = random.choice(fits)
-    log_part = random.choice(logistics)
+    if not in_commutable_zone:
+        if willing_relocate:
+            logistics.append(f"relocation from {loc} will be required")
+        else:
+            logistics.append(f"candidate is located in {loc} (not commutable/relocating)")
+            
+    if logistics:
+        log_str = " Constraints: " + " and ".join(logistics) + "."
+    else:
+        log_str = " Displays optimal availability and local commutable geography."
+
+    # 4. Platform engagement
+    engagement_phrases = [
+        f"Shows exceptional responsiveness on the platform with a {int(rr * 100)}% recruiter response rate.",
+        f"Shows active platform engagement, returning a {int(rr * 100)}% response rate.",
+        f"Highly active candidate with a {int(rr * 100)}% platform response rate."
+    ]
+    engagement = random.choice(engagement_phrases)
     
-    reasoning = f"{starter} {fit} {log_part}"
+    # Merge parts into a cohesive paragraph that flows naturally
+    reasoning = f"{intro} {fit}{log_str} {engagement}"
     return reasoning.strip().replace("\n", " ")
 
 def main():
@@ -793,19 +832,33 @@ def main():
     total_scanned = 0
     honeypot_count = 0
     
+    candidates = []
     with open(candidates_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            cand = json.loads(line)
-            total_scanned += 1
+        content = f.read().strip()
+        if content.startswith("["):
+            try:
+                candidates = json.loads(content)
+            except Exception as e:
+                print(f"Error parsing JSON list: {e}")
+                sys.exit(1)
+        else:
+            for line in content.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    candidates.append(json.loads(line))
+                except Exception as e:
+                    print(f"Error parsing JSON line: {e}")
+                    sys.exit(1)
+
+    for cand in candidates:
+        total_scanned += 1
+        if detect_honeypot(cand):
+            honeypot_count += 1
             
-            if detect_honeypot(cand):
-                honeypot_count += 1
-                
-            is_valid, score, info = evaluate_candidate(cand)
-            if is_valid:
-                results.append((round(score, 4), cand["candidate_id"], info))
+        is_valid, score, info = evaluate_candidate(cand)
+        if is_valid:
+            results.append((round(score, 4), cand["candidate_id"], info))
                 
     print(f"Scanned: {total_scanned} candidates.")
     print(f"Detected and filtered out {honeypot_count} honeypots.")
@@ -824,9 +877,10 @@ def main():
         writer = csv.writer(csvfile)
         writer.writerow(["candidate_id", "rank", "score", "reasoning"])
         
+        max_score = top_100[0][0] if top_100 else 1.0
         for idx, (score, cid, info) in enumerate(top_100):
             rank = idx + 1
-            reason = generate_reasoning(info, rank)
+            reason = generate_reasoning(info, rank, max_score)
             writer.writerow([cid, rank, score, reason])
             
     print(f"Successfully generated rank list and wrote to: {output_path}")

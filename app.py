@@ -157,9 +157,10 @@ if candidates:
     
     # Create final dataset
     final_rows = []
+    max_score = top_100[0][0] if top_100 else 1.0
     for idx, (score, cid, info) in enumerate(top_100):
         rank = idx + 1
-        reason = generate_reasoning(info, rank)
+        reason = generate_reasoning(info, rank, max_score)
         final_rows.append({
             "Rank": rank,
             "Candidate ID": cid,
@@ -222,7 +223,7 @@ if candidates:
     writer.writerow(["candidate_id", "rank", "score", "reasoning"])
     for idx, (score, cid, info) in enumerate(top_100):
         rank = idx + 1
-        reason = generate_reasoning(info, rank)
+        reason = generate_reasoning(info, rank, max_score)
         writer.writerow([cid, rank, round(score, 4), reason])
         
     csv_data = csv_buffer.getvalue()
