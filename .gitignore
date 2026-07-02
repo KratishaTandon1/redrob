@@ -21,3 +21,16 @@ __pycache__/
 ehthumbs.db
 Thumbs.db
 __MACOSX/
+
+# Ignore presentation files
+*.pptx
+
+# Ignore Excel outputs
+*.xlsx
+
+# Ignore CSV submissions and temp files
+*submission.csv
+submission.csv
+submission_temp.csv
+submission_test_100k.csv
+
